@@ -7,6 +7,15 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const savedReferenceFallback = (name: string, type: string, reason: string) =>
+  NextResponse.json({
+    name,
+    type: type || "unknown",
+    summary: "Reference received, but AI analysis was unavailable. A basic notification style guide was saved.",
+    guidance: "Use a short attention-grabbing hook, state one clear benefit, keep the tone conversational, and finish with a direct call to action.",
+    warning: reason,
+  });
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -87,14 +96,11 @@ export async function POST(request: NextRequest) {
           warning: "AI summary unavailable; extracted text was saved.",
         });
       }
-      return NextResponse.json({
-        name: uploadedFile.name,
-        type: uploadedFile.type || "unknown",
-        summary: "Reference image saved, but AI analysis was unavailable. Please try again after checking the OpenRouter key.",
-        guidance: "Use short, clear notification copy with a strong hook, specific value, and a direct call to action.",
-        warning: `AI analysis unavailable (${response.status}); reference was saved locally in this browser.`,
-        providerDetails: details.slice(0, 500),
-      });
+      return savedReferenceFallback(
+        uploadedFile.name,
+        uploadedFile.type,
+        `AI analysis unavailable (${response.status}). Check OpenRouter credits, model access, or API key. ${details.slice(0, 300)}`,
+      );
     }
     const responseText = await response.text();
     if (!responseText.trim()) {
@@ -106,9 +112,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ name: uploadedFile.name, type: uploadedFile.type || "unknown", ...analysis });
   } catch (error) {
     console.error("Learning route error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to learn from this file", details: "The server could not process this upload." },
-      { status: 500 },
+    return savedReferenceFallback(
+      "Uploaded reference",
+      "unknown",
+      `AI learning could not complete: ${error instanceof Error ? error.message : "unknown server error"}`,
     );
   }
 }
