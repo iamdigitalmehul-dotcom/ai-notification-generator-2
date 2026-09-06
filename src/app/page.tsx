@@ -10,6 +10,11 @@ type LearnedReference = {
   examples?: string[];
 };
 
+type LearningResponse = LearnedReference & {
+  warning?: string;
+  error?: string;
+};
+
 const businesses = [
   "La Milano Pizza",
   "Urban Cart",
@@ -274,7 +279,7 @@ export default function Home() {
       formData.append("file", learningFile);
       const response = await fetch("/api/learn", { method: "POST", body: formData });
       const responseText = await response.text();
-      let data: { name?: string; warning?: string; error?: string };
+      let data: LearningResponse;
       try {
         data = responseText ? JSON.parse(responseText) : {};
       } catch {
