@@ -4,6 +4,7 @@ import { PDFParse } from "pdf-parse";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
@@ -14,23 +15,31 @@ export async function POST(request: NextRequest) {
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Please upload a file" }, { status: 400 });
     }
+    const lowerName = file.name.toLowerCase();
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+    const isDocx = file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx");
+    const isText = file.type.startsWith("text/") || lowerName.endsWith(".txt");
+    if (!isImage && !isPdf && !isDocx && !isText) {
+      return NextResponse.json({ error: "Only image, PDF, DOCX, or TXT files are supported" }, { status: 415 });
+    }
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json({ error: "File size must be 10 MB or less" }, { status: 413 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     let extractedText = "";
-    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    if (isPdf) {
       const parser = new PDFParse({ data: buffer });
       const result = await parser.getText();
       extractedText = result.text;
       await parser.destroy();
     } else if (
       file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      file.name.toLowerCase().endsWith(".docx")
+      lowerName.endsWith(".docx")
     ) {
       extractedText = (await mammoth.extractRawText({ buffer })).value;
-    } else if (file.type.startsWith("text/") || file.name.toLowerCase().endsWith(".txt")) {
+    } else if (isText) {
       extractedText = buffer.toString("utf8");
     }
 
@@ -46,7 +55,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const isImage = file.type.startsWith("image/");
     const prompt = "You are learning notification writing style from a reference file. This is NOT a request to generate a notification. Analyze only the patterns in the reference and return JSON with exactly these keys: summary (one sentence), guidance (4-6 concise rules about tone, length, hooks, CTA, formatting), examples (up to 3 short examples copied or paraphrased from the reference). Do not invent brand facts.";
     const content = isImage
       ? [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${file.type};base64,${buffer.toString("base64")}` } }]
@@ -66,6 +74,7 @@ export async function POST(request: NextRequest) {
         response_format: { type: "json_object" },
         messages: [{ role: "user", content }],
       }),
+      signal: AbortSignal.timeout(50000),
     });
 
     if (!response.ok) {
@@ -80,7 +89,14 @@ export async function POST(request: NextRequest) {
           warning: "AI summary unavailable; extracted text was saved.",
         });
       }
-      return NextResponse.json({ error: "AI learning analysis failed", details }, { status: 502 });
+      return NextResponse.json({
+        name: file.name,
+        type: file.type || "unknown",
+        summary: "Reference image saved, but AI analysis was unavailable. Please try again after checking the OpenRouter key.",
+        guidance: "Use short, clear notification copy with a strong hook, specific value, and a direct call to action.",
+        warning: `AI analysis unavailable (${response.status}); reference was saved locally in this browser.`,
+        providerDetails: details.slice(0, 500),
+      });
     }
     const responseText = await response.text();
     if (!responseText.trim()) {
