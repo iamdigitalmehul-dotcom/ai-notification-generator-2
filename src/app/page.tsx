@@ -15,6 +15,12 @@ type LearningResponse = LearnedReference & {
   error?: string;
 };
 
+const isLearningResponse = (value: unknown): value is LearningResponse => {
+  if (!value || typeof value !== "object") return false;
+  const response = value as Partial<LearningResponse>;
+  return typeof response.name === "string" && typeof response.type === "string";
+};
+
 const businesses = [
   "La Milano Pizza",
   "Urban Cart",
@@ -279,14 +285,27 @@ export default function Home() {
       formData.append("file", learningFile);
       const response = await fetch("/api/learn", { method: "POST", body: formData });
       const responseText = await response.text();
-      let data: LearningResponse;
+      let data: unknown;
       try {
-        data = responseText ? JSON.parse(responseText) : {};
+        data = responseText ? JSON.parse(responseText) : null;
       } catch {
         throw new Error(`Learning service returned an invalid response (${response.status})`);
       }
-      if (!response.ok) throw new Error(data?.error ?? "Learning failed");
-      const updated = [...learnedReferences, data];
+      if (!response.ok) {
+        const errorMessage = data && typeof data === "object" && "error" in data && typeof data.error === "string"
+          ? data.error
+          : "Learning failed";
+        throw new Error(errorMessage);
+      }
+      if (!isLearningResponse(data)) throw new Error("Learning service returned incomplete data");
+      const learnedReference: LearnedReference = {
+        name: data.name,
+        type: data.type,
+        summary: data.summary,
+        guidance: data.guidance,
+        examples: data.examples,
+      };
+      const updated: LearnedReference[] = [...learnedReferences, learnedReference];
       setLearnedReferences(updated);
       window.localStorage.setItem("notification-learning-library", JSON.stringify(updated));
       setLearningFile(null);
