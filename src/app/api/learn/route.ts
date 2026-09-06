@@ -12,32 +12,30 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get("file");
 
-    if (!(file instanceof File)) {
+    if (!file || typeof file !== "object" || !("arrayBuffer" in file) || typeof file.arrayBuffer !== "function") {
       return NextResponse.json({ error: "Please upload a file" }, { status: 400 });
     }
-    const lowerName = file.name.toLowerCase();
-    const isImage = file.type.startsWith("image/");
-    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
-    const isDocx = file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx");
-    const isText = file.type.startsWith("text/") || lowerName.endsWith(".txt");
+    const uploadedFile = file as File;
+    const lowerName = uploadedFile.name.toLowerCase();
+    const isImage = uploadedFile.type.startsWith("image/");
+    const isPdf = uploadedFile.type === "application/pdf" || lowerName.endsWith(".pdf");
+    const isDocx = uploadedFile.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx");
+    const isText = uploadedFile.type.startsWith("text/") || lowerName.endsWith(".txt");
     if (!isImage && !isPdf && !isDocx && !isText) {
       return NextResponse.json({ error: "Only image, PDF, DOCX, or TXT files are supported" }, { status: 415 });
     }
-    if (file.size > MAX_FILE_SIZE) {
+    if (uploadedFile.size > MAX_FILE_SIZE) {
       return NextResponse.json({ error: "File size must be 10 MB or less" }, { status: 413 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const buffer = Buffer.from(await uploadedFile.arrayBuffer());
     let extractedText = "";
     if (isPdf) {
       const parser = new PDFParse({ data: buffer });
       const result = await parser.getText();
       extractedText = result.text;
       await parser.destroy();
-    } else if (
-      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      lowerName.endsWith(".docx")
-    ) {
+    } else if (isDocx) {
       extractedText = (await mammoth.extractRawText({ buffer })).value;
     } else if (isText) {
       extractedText = buffer.toString("utf8");
@@ -46,8 +44,8 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
       return NextResponse.json({
-        name: file.name,
-        type: file.type || "unknown",
+        name: uploadedFile.name,
+        type: uploadedFile.type || "unknown",
         summary: extractedText
           ? `Reference text saved (${extractedText.trim().length} characters).`
           : "Reference saved. Add an OpenRouter key to create an AI style summary.",
@@ -57,7 +55,7 @@ export async function POST(request: NextRequest) {
 
     const prompt = "You are learning notification writing style from a reference file. This is NOT a request to generate a notification. Analyze only the patterns in the reference and return JSON with exactly these keys: summary (one sentence), guidance (4-6 concise rules about tone, length, hooks, CTA, formatting), examples (up to 3 short examples copied or paraphrased from the reference). Do not invent brand facts.";
     const content = isImage
-      ? [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${file.type};base64,${buffer.toString("base64")}` } }]
+      ? [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${uploadedFile.type};base64,${buffer.toString("base64")}` } }]
       : [{ type: "text", text: `${prompt}\n\nREFERENCE TEXT:\n${extractedText.slice(0, 12000)}` }];
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -82,16 +80,16 @@ export async function POST(request: NextRequest) {
       console.error("OpenRouter learning error:", details);
       if (extractedText.trim()) {
         return NextResponse.json({
-          name: file.name,
-          type: file.type || "unknown",
+          name: uploadedFile.name,
+          type: uploadedFile.type || "unknown",
           summary: "Reference text saved. AI summary was unavailable, so the extracted notification examples will still guide future generations.",
           guidance: extractedText.slice(0, 3000),
           warning: "AI summary unavailable; extracted text was saved.",
         });
       }
       return NextResponse.json({
-        name: file.name,
-        type: file.type || "unknown",
+        name: uploadedFile.name,
+        type: uploadedFile.type || "unknown",
         summary: "Reference image saved, but AI analysis was unavailable. Please try again after checking the OpenRouter key.",
         guidance: "Use short, clear notification copy with a strong hook, specific value, and a direct call to action.",
         warning: `AI analysis unavailable (${response.status}); reference was saved locally in this browser.`,
@@ -105,11 +103,11 @@ export async function POST(request: NextRequest) {
     const result = JSON.parse(responseText);
     const text = result?.choices?.[0]?.message?.content || "{}";
     const analysis = JSON.parse(text.replace(/```json\s*/gi, "").replace(/```/g, "").trim());
-    return NextResponse.json({ name: file.name, type: file.type || "unknown", ...analysis });
+    return NextResponse.json({ name: uploadedFile.name, type: uploadedFile.type || "unknown", ...analysis });
   } catch (error) {
     console.error("Learning route error:", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to learn from this file" },
+      { error: error instanceof Error ? error.message : "Unable to learn from this file", details: "The server could not process this upload." },
       { status: 500 },
     );
   }
