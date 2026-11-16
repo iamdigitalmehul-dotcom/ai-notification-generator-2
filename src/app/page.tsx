@@ -74,6 +74,7 @@ const conceptOptions = [
 const languageOptions = ["English", "Hindi", "Hinglish"];
 const TITLE_MAX_LENGTH = 40;
 const DESCRIPTION_MAX_LENGTH = 90;
+const MAX_LEARNING_FILE_SIZE = 10 * 1024 * 1024;
 
 const templates: Record<string, { title: string[]; description: string[] }> = {
   Funny: {
@@ -173,6 +174,7 @@ export default function Home() {
   });
   const [isLearning, setIsLearning] = useState(false);
   const [learningMessage, setLearningMessage] = useState("");
+  const [learningMessageIsError, setLearningMessageIsError] = useState(false);
 
   const learnedGuidance = learnedReferences
     .map((reference) => `${reference.name}: ${reference.summary ?? ""}\n${reference.guidance ?? ""}`)
@@ -276,10 +278,27 @@ export default function Home() {
     setCopiedFields((previous) => ({ ...previous, [`${field}-${index}`]: true }));
   };
 
+  const handleLearningFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setLearningMessage("");
+    setLearningMessageIsError(false);
+
+    if (file && file.size > MAX_LEARNING_FILE_SIZE) {
+      setLearningFile(null);
+      setLearningMessage("File size must be 10 MB or less.");
+      setLearningMessageIsError(true);
+      event.target.value = "";
+      return;
+    }
+
+    setLearningFile(file);
+  };
+
   const learnFromFile = async () => {
     if (!learningFile) return;
     setIsLearning(true);
     setLearningMessage("");
+    setLearningMessageIsError(false);
     try {
       const formData = new FormData();
       formData.append("file", learningFile);
@@ -295,7 +314,7 @@ export default function Home() {
         const errorMessage = data && typeof data === "object" && "error" in data && typeof data.error === "string"
           ? data.error
           : "Learning failed";
-        throw new Error(errorMessage);
+        throw new Error(`Learning request failed (HTTP ${response.status}): ${errorMessage}`);
       }
       if (!isLearningResponse(data)) throw new Error("Learning service returned incomplete data");
       const learnedReference: LearnedReference = {
@@ -310,8 +329,10 @@ export default function Home() {
       window.localStorage.setItem("notification-learning-library", JSON.stringify(updated));
       setLearningFile(null);
       setLearningMessage(data.warning ?? "Reference learned. Future notifications will use its style patterns.");
+      setLearningMessageIsError(false);
     } catch (error) {
       setLearningMessage(error instanceof Error ? error.message : "Learning failed");
+      setLearningMessageIsError(true);
     } finally {
       setIsLearning(false);
     }
@@ -531,18 +552,18 @@ export default function Home() {
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-500">Private style library</p>
                 <h2 id="learning-title" className="mt-2 text-2xl font-bold text-slate-900">Teach notification style</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">Upload a reference image, PDF, or Word file. This teaches writing patterns only; it does not generate a notification or retrain OpenAI.</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">Upload an image, PDF, DOCX, or TXT reference. This teaches writing patterns only; it does not generate a notification or retrain OpenAI.</p>
               </div>
               <button onClick={() => setIsLearningOpen(false)} aria-label="Close learning dialog" className="text-2xl leading-none text-slate-400 hover:text-slate-700">×</button>
             </div>
             <label className="mt-6 block rounded-2xl border-2 border-dashed border-orange-200 bg-orange-50 p-6 text-center text-sm font-semibold text-slate-700">
               <span className="block text-3xl">↑</span>
-              <span className="mt-2 block">Choose image, PDF, or Word file</span>
+              <span className="mt-2 block">Choose image, PDF, DOCX, or TXT file</span>
               <span className="mt-1 block text-xs font-normal text-slate-500">Maximum 10 MB</span>
-              <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" onChange={(event) => setLearningFile(event.target.files?.[0] ?? null)} className="sr-only" />
+              <input type="file" accept="image/*,.pdf,.docx,.txt" onChange={handleLearningFileChange} className="sr-only" />
             </label>
             {learningFile ? <p className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-sm text-slate-700">Selected: {learningFile.name}</p> : null}
-            {learningMessage ? <p className="mt-3 text-sm text-emerald-700">{learningMessage}</p> : null}
+            {learningMessage ? <p role={learningMessageIsError ? "alert" : "status"} className={`mt-3 text-sm ${learningMessageIsError ? "text-red-700" : "text-emerald-700"}`}>{learningMessage}</p> : null}
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={() => setIsLearningOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Close</button>
               <button onClick={learnFromFile} disabled={!learningFile || isLearning} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">{isLearning ? "Learning..." : "Add to learning"}</button>

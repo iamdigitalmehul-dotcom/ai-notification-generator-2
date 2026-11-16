@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -40,10 +39,14 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(await uploadedFile.arrayBuffer());
     let extractedText = "";
     if (isPdf) {
+      const { PDFParse } = await import("pdf-parse");
       const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
-      extractedText = result.text;
-      await parser.destroy();
+      try {
+        const result = await parser.getText();
+        extractedText = result.text;
+      } finally {
+        await parser.destroy();
+      }
     } else if (isDocx) {
       extractedText = (await mammoth.extractRawText({ buffer })).value;
     } else if (isText) {
