@@ -1,16 +1,14 @@
 "use client";
 
-import { ChangeEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  LearnedReference,
+  listLearnedReferences,
+  removeLearnedReference,
+  saveLearnedReference,
+} from "@/lib/learned-references";
 
-type LearnedReference = {
-  name: string;
-  type: string;
-  summary?: string;
-  guidance?: string;
-  examples?: string[];
-};
-
-type LearningResponse = LearnedReference & {
+type LearningResponse = Pick<LearnedReference, "name" | "type" | "content" | "summary"> & {
   warning?: string;
   error?: string;
 };
@@ -18,7 +16,23 @@ type LearningResponse = LearnedReference & {
 const isLearningResponse = (value: unknown): value is LearningResponse => {
   if (!value || typeof value !== "object") return false;
   const response = value as Partial<LearningResponse>;
-  return typeof response.name === "string" && typeof response.type === "string";
+  return typeof response.name === "string" &&
+    typeof response.type === "string" &&
+    typeof response.content === "string";
+};
+
+const isGeneratedNotification = (value: unknown): value is GeneratedNotification => {
+  if (!value || typeof value !== "object") return false;
+  const notification = value as Partial<GeneratedNotification>;
+  return typeof notification.format === "string" &&
+    typeof notification.title === "string" &&
+    typeof notification.description === "string";
+};
+
+type GeneratedNotification = {
+  format: string;
+  title: string;
+  description: string;
 };
 
 const businesses = [
@@ -76,79 +90,6 @@ const TITLE_MAX_LENGTH = 40;
 const DESCRIPTION_MAX_LENGTH = 90;
 const MAX_LEARNING_FILE_SIZE = 10 * 1024 * 1024;
 
-const templates: Record<string, { title: string[]; description: string[] }> = {
-  Funny: {
-    title: ["Plan tha simple…", "Bhai, reality hit", "Tabiyat kharab?"],
-    description: [
-      "Phir BOGO ne sab reset kar diya. 🍕",
-      "Aaj ka plan bhi overbooked ho gaya. 😅",
-      "Jab deal aayi, to routine bhi ruk gaya. 😂",
-    ],
-  },
-  FOMO: {
-    title: ["Aaj nahi, to kab?", "Ye chance miss mat karo", "Last call hai"],
-    description: [
-      "Everyone is already tapping in. Be quick before it disappears.",
-      "The window is closing, and the deal is moving fast.",
-      "The crowd is on it—now it is your turn.",
-    ],
-  },
-  Urgency: {
-    title: ["Offer ends soon", "Only a few left", "Run before it ends"],
-    description: [
-      "The clock is ticking and the discount is slipping away.",
-      "Stock is moving fast—don’t wait for tomorrow.",
-      "Today’s deal may not be there tomorrow.",
-    ],
-  },
-  Minimal: {
-    title: ["New drop. Ready.", "Small win, big mood.", "This one deserves attention."],
-    description: [
-      "Minimal aesthetic, maximum payoff.",
-      "Well-timed, well-made, worth the tap.",
-      "A crisp offer for a sharper mood.",
-    ],
-  },
-  Premium: {
-    title: ["Elevated essentials", "Designed to stand out", "For the taste that notices"],
-    description: [
-      "Premium quality, premium feel, premium timing.",
-      "Crafted for a sharper eye and a better routine.",
-      "Refined details, without the extra noise.",
-    ],
-  },
-};
-
-const getToneText = (language: string, text: string) => {
-  if (language === "Hindi") {
-    return text
-      .replace("The clock is ticking", "Samay khatam hone wala hai")
-      .replace("don’t wait for tomorrow", "kal ka intezaar mat karo")
-      .replace("Now it is your turn", "Ab aapki baari hai")
-      .replace("Plan tha simple", "Plan toh simple tha")
-      .replace("yesterday", "kal");
-  }
-
-  if (language === "Hinglish") {
-    return text
-      .replace("The clock is ticking", "Clock toh tik-tik kar raha hai")
-      .replace("don’t wait for tomorrow", "kal ke liye wait mat karo")
-      .replace("Now it is your turn", "Ab aapki turn hai")
-      .replace("Plan tha simple", "Plan toh simple tha");
-  }
-
-  return text;
-};
-
-const clampLength = (text: string, maxLength: number) =>
-  text.length > maxLength ? text.slice(0, maxLength - 1).trimEnd() + "…" : text;
-
-const fitLength = (text: string, minLength: number, maxLength: number, padding: string) => {
-  let result = text.trim();
-  while (result.length < minLength) result = `${result} ${padding}`;
-  return clampLength(result, maxLength);
-};
-
 export default function Home() {
   const [selectedBusiness, setSelectedBusiness] = useState(businesses[0]);
   const [style, setStyle] = useState(styleOptions[0]);
@@ -161,29 +102,32 @@ export default function Home() {
   const [product, setProduct] = useState("Pizza");
   const [offer, setOffer] = useState("BOGO");
   const [price, setPrice] = useState("₹299");
-  const [cta, setCta] = useState("Order Now");
-  const [generated, setGenerated] = useState<Array<{ title: string; description: string; similarity: string }>>([]);
+  const [cta, setCta] = useState("See the offer");
+  const [generated, setGenerated] = useState<GeneratedNotification[]>([]);
   const [copiedFields, setCopiedFields] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [generationError, setGenerationError] = useState("");
   const [isLearningOpen, setIsLearningOpen] = useState(false);
   const [learningFile, setLearningFile] = useState<File | null>(null);
-  const [learnedReferences, setLearnedReferences] = useState<LearnedReference[]>(() => {
-    if (typeof window === "undefined") return [];
-    const saved = window.localStorage.getItem("notification-learning-library");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [learnedReferences, setLearnedReferences] = useState<LearnedReference[]>([]);
+  const [libraryError, setLibraryError] = useState("");
   const [isLearning, setIsLearning] = useState(false);
   const [learningMessage, setLearningMessage] = useState("");
   const [learningMessageIsError, setLearningMessageIsError] = useState(false);
 
-  const learnedGuidance = learnedReferences
-    .map((reference) => `${reference.name}: ${reference.summary ?? ""}\n${reference.guidance ?? ""}`)
-    .join("\n\n");
+  useEffect(() => {
+    listLearnedReferences()
+      .then(setLearnedReferences)
+      .catch((error: unknown) => {
+        console.error("Could not load learning library:", error);
+        setLibraryError("The saved learning library could not be loaded.");
+      });
+  }, []);
 
   const charStats = useMemo(
     () => ({
-      title: Math.min(TITLE_MAX_LENGTH, generated[0]?.title?.length ?? 0),
-      description: Math.min(DESCRIPTION_MAX_LENGTH, generated[0]?.description?.length ?? 0),
+      title: generated[0]?.title?.length ?? 0,
+      description: generated[0]?.description?.length ?? 0,
     }),
     [generated],
   );
@@ -204,8 +148,9 @@ export default function Home() {
   };
 
   const generateNotifications = async () => {
-    const isRegenerationAfterNoCopy = generated.length > 0 && Object.keys(copiedFields).length === 0;
     setIsLoading(true);
+    setGenerationError("");
+    setGenerated([]);
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
@@ -218,55 +163,38 @@ export default function Home() {
           concept,
           titleLanguage,
           descriptionLanguage,
-          feedback: isRegenerationAfterNoCopy
-            ? "The previous notification was not copied, so the user did not find it interesting. Create a noticeably fresher, more attention-grabbing result with a stronger hook and less predictable wording."
-            : "No negative feedback yet.",
           product,
           offer,
           price,
           cta,
-          learnedGuidance,
+          learnedReferences: learnedReferences.map(({ name, content }) => ({ name, content })),
         }),
       });
 
-      const data = await response.json();
+      const data: unknown = await response.json();
 
       if (!response.ok) {
-        throw new Error(data?.error ?? "Something went wrong");
+        const message = data && typeof data === "object" && "error" in data && typeof data.error === "string"
+          ? data.error
+          : `Gemini request failed (HTTP ${response.status})`;
+        throw new Error(message);
       }
 
-      const variance = (data.variations ?? []).map((item: { title: string; description: string }, index: number) => ({
-        title: fitLength(getToneText(titleLanguage, item.title ?? ""), 30, TITLE_MAX_LENGTH, "Don't miss this"),
-        description: fitLength(getToneText(descriptionLanguage, item.description ?? ""), 60, DESCRIPTION_MAX_LENGTH, "Tap before it ends."),
-        similarity: index === 0 ? "Original" : index === 1 ? "High originality" : "Original",
-      }));
+      const variations =
+        !data ||
+        typeof data !== "object" ||
+        !("variations" in data) ||
+        !Array.isArray(data.variations)
+          ? null
+          : data.variations;
+      if (!variations || variations.length < 3 || !variations.every(isGeneratedNotification)) {
+        throw new Error("Gemini returned fewer than three valid notifications.");
+      }
 
-      setGenerated(variance.length ? variance : []);
+      setGenerated(variations);
     } catch (error) {
       console.error("Generate API error:", error);
-      const conceptTone = templates[style] ?? templates.Funny;
-      const titlePool = conceptTone.title;
-      const descriptionPool = conceptTone.description;
-
-      const fallback = [
-        {
-          title: getToneText(titleLanguage, fitLength(`${product} ka plan tha simple…`, 30, TITLE_MAX_LENGTH, "Don't miss this")),
-          description: getToneText(descriptionLanguage, fitLength(`${offer} ne plan hi badal diya. ${price} mein ${cta.toLowerCase()} karen.`, 60, DESCRIPTION_MAX_LENGTH, "Tap before it ends.")),
-          similarity: "Original",
-        },
-        {
-          title: getToneText(titleLanguage, fitLength(titlePool[0], 30, TITLE_MAX_LENGTH, "Don't miss this")),
-          description: getToneText(descriptionLanguage, fitLength(descriptionPool[0], 60, DESCRIPTION_MAX_LENGTH, "Tap before it ends.")),
-          similarity: "High originality",
-        },
-        {
-          title: getToneText(titleLanguage, fitLength(`${concept}: ${product} x ${offer}`, 30, TITLE_MAX_LENGTH, "Don't miss this")),
-          description: getToneText(descriptionLanguage, fitLength(`Aaj ka offer sirf ${price} mein available hai. ${cta} now before it slips away.`, 60, DESCRIPTION_MAX_LENGTH, "Tap before it ends.")),
-          similarity: "Original",
-        },
-      ];
-
-      setGenerated(fallback);
+      setGenerationError(error instanceof Error ? error.message : "Notification generation failed. Please retry.");
     } finally {
       setCopiedFields({});
       setIsLoading(false);
@@ -276,6 +204,17 @@ export default function Home() {
   const copyField = async (value: string, field: string, index: number) => {
     await navigator.clipboard.writeText(value);
     setCopiedFields((previous) => ({ ...previous, [`${field}-${index}`]: true }));
+  };
+
+  const forgetLearnedReference = async (id: string) => {
+    try {
+      await removeLearnedReference(id);
+      setLearnedReferences((references) => references.filter((reference) => reference.id !== id));
+      setLibraryError("");
+    } catch (error) {
+      console.error("Could not remove learning reference:", error);
+      setLibraryError("The selected learning reference could not be removed.");
+    }
   };
 
   const handleLearningFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -318,15 +257,16 @@ export default function Home() {
       }
       if (!isLearningResponse(data)) throw new Error("Learning service returned incomplete data");
       const learnedReference: LearnedReference = {
+        id: crypto.randomUUID(),
         name: data.name,
         type: data.type,
+        content: data.content,
         summary: data.summary,
-        guidance: data.guidance,
-        examples: data.examples,
       };
-      const updated: LearnedReference[] = [...learnedReferences, learnedReference];
+      await saveLearnedReference(learnedReference);
+      const updated = [...learnedReferences, learnedReference];
       setLearnedReferences(updated);
-      window.localStorage.setItem("notification-learning-library", JSON.stringify(updated));
+      setLibraryError("");
       setLearningFile(null);
       setLearningMessage(data.warning ?? "Reference learned. Future notifications will use its style patterns.");
       setLearningMessageIsError(false);
@@ -450,8 +390,20 @@ export default function Home() {
               </div>
 
               <button onClick={generateNotifications} disabled={isLoading} className="w-full rounded-2xl bg-slate-900 px-5 py-3 text-base font-semibold text-white shadow-lg shadow-slate-200 transition hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed">
-                {isLoading ? "Generating..." : "Generate Notification"}
+                {isLoading ? "Generating with Gemini..." : "Generate Notification"}
               </button>
+              {generationError ? (
+                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                  <p>{generationError}</p>
+                  <button
+                    onClick={generateNotifications}
+                    disabled={isLoading}
+                    className="mt-3 rounded-lg bg-red-800 px-3 py-2 font-semibold text-white disabled:opacity-50"
+                  >
+                    {isLoading ? "Retrying..." : "Retry"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </section>
 
@@ -479,20 +431,38 @@ export default function Home() {
                 <div className="mt-2 text-base font-semibold">Title: {titleLanguage}</div>
                 <div className="mt-1 text-sm text-slate-300">Description: {descriptionLanguage}</div>
               </div>
+              {libraryError ? (
+                <div role="alert" className="rounded-xl border border-red-300/30 bg-red-300/10 p-3 text-sm text-red-100">
+                  {libraryError}
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-7 rounded-2xl border border-white/10 bg-white/5 p-4">
               <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">MVP safeguards</h3>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                <li>• Length-safe title and description checks</li>
-                <li>• Similarity check before final output</li>
+                <li>• Gemini length and quality validation</li>
                 <li>• Confirm/edit image fields before generation</li>
               </ul>
             </div>
             {learnedReferences.length > 0 ? (
               <div className="mt-4 rounded-2xl border border-orange-300/20 bg-orange-300/10 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200">Style library</p>
-                <p className="mt-2 text-sm text-slate-200">{learnedReferences.map((reference) => reference.name).join(", ")}</p>
+                <ul className="mt-2 space-y-2 text-sm text-slate-200">
+                  {learnedReferences.map((reference) => (
+                    <li key={reference.id} className="flex items-start justify-between gap-2">
+                      <span className="break-all">{reference.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => void forgetLearnedReference(reference.id)}
+                        aria-label={`Remove ${reference.name} from the learning library`}
+                        className="shrink-0 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
           </aside>
@@ -517,7 +487,6 @@ export default function Home() {
                 <article key={`${item.title}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">Variation {index + 1}</span>
-                    <span className="text-xs font-medium text-emerald-600">Similarity: {item.similarity}</span>
                   </div>
                   <div className="mb-3 rounded-xl bg-white p-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Title</p>
@@ -552,15 +521,15 @@ export default function Home() {
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-500">Private style library</p>
                 <h2 id="learning-title" className="mt-2 text-2xl font-bold text-slate-900">Teach notification style</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">Upload an image, PDF, DOCX, or TXT reference. This teaches writing patterns only; it does not generate a notification or retrain OpenAI.</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">Upload a Markdown, TXT, JSON, PDF, or DOCX reference. Its text is saved in this browser and used as a style reference for Gemini.</p>
               </div>
               <button onClick={() => setIsLearningOpen(false)} aria-label="Close learning dialog" className="text-2xl leading-none text-slate-400 hover:text-slate-700">×</button>
             </div>
             <label className="mt-6 block rounded-2xl border-2 border-dashed border-orange-200 bg-orange-50 p-6 text-center text-sm font-semibold text-slate-700">
               <span className="block text-3xl">↑</span>
-              <span className="mt-2 block">Choose image, PDF, DOCX, or TXT file</span>
+              <span className="mt-2 block">Choose MD, TXT, JSON, PDF, or DOCX file</span>
               <span className="mt-1 block text-xs font-normal text-slate-500">Maximum 10 MB</span>
-              <input type="file" accept="image/*,.pdf,.docx,.txt" onChange={handleLearningFileChange} className="sr-only" />
+              <input type="file" accept=".md,.txt,.json,.pdf,.docx" onChange={handleLearningFileChange} className="sr-only" />
             </label>
             {learningFile ? <p className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-sm text-slate-700">Selected: {learningFile.name}</p> : null}
             {learningMessage ? <p role={learningMessageIsError ? "alert" : "status"} className={`mt-3 text-sm ${learningMessageIsError ? "text-red-700" : "text-emerald-700"}`}>{learningMessage}</p> : null}
